@@ -1,0 +1,4 @@
+models/*
+data/*
+__pycache__/*
+discord_bot_xenlite.py
