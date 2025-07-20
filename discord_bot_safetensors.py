@@ -437,7 +437,7 @@ def create_bot():
 
 def main():
     parser = argparse.ArgumentParser(description="XenLite Xen3 Discord Bot with SafeTensors")
-    parser.add_argument("--model_path", type=str, default="./models/xenlite_xen3_safetensors", 
+    parser.add_argument("--model_path", type=str, default="./models/", 
                        help="Path to safetensors model directory")
     parser.add_argument("--token", type=str, required=True, help="Discord bot token")
     parser.add_argument("--device", type=str, default="auto", 
