@@ -7,7 +7,8 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 import os
 import argparse
-from XenLiteXen3 import XenLiteXen3, DDPMScheduler
+from safetensors.torch import save_file, load_file
+from XenLiteXen3Safetensors import XenLiteXen3, DDPMScheduler
 
 def get_cifar10_dataloader(batch_size=64, num_workers=4):
     transform = transforms.Compose([
@@ -31,6 +32,57 @@ def get_cifar10_dataloader(batch_size=64, num_workers=4):
     )
     
     return dataloader
+
+def save_model_safetensors(model, optimizer, epoch, loss, filepath):
+    """safetensors를 사용하여 모델 저장"""
+    # 모델 상태와 메타데이터를 분리하여 저장
+    model_state = model.state_dict()
+    optimizer_state = optimizer.state_dict()
+    
+    # safetensors는 텐서만 저장할 수 있으므로, 메타데이터는 별도 저장
+    metadata = {
+        "epoch": str(epoch),
+        "loss": str(loss),
+        "model_type": "XenLiteXen3",
+        "framework": "pytorch"
+    }
+    
+    # 모델 가중치를 safetensors로 저장
+    model_path = filepath.replace('.pth', '_model.safetensors')
+    save_file(model_state, model_path, metadata=metadata)
+    
+    # 옵티마이저 상태는 PyTorch 형식으로 저장 (safetensors가 복잡한 구조를 지원하지 않으므로)
+    optimizer_path = filepath.replace('.pth', '_optimizer.pth')
+    torch.save({
+        'optimizer_state_dict': optimizer_state,
+        'epoch': epoch,
+        'loss': loss
+    }, optimizer_path)
+    
+    print(f"Model saved as safetensors: {model_path}")
+    print(f"Optimizer state saved: {optimizer_path}")
+
+def load_model_safetensors(model, optimizer, model_path, optimizer_path=None):
+    """safetensors에서 모델 로드"""
+    try:
+        # 모델 가중치 로드
+        model_state = load_file(model_path)
+        model.load_state_dict(model_state)
+        print(f"Model loaded from: {model_path}")
+        
+        # 옵티마이저 상태 로드 (있는 경우)
+        if optimizer_path and os.path.exists(optimizer_path):
+            checkpoint = torch.load(optimizer_path, map_location='cpu')
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            epoch = checkpoint['epoch']
+            loss = checkpoint['loss']
+            print(f"Optimizer state loaded from: {optimizer_path}")
+            return epoch, loss
+        
+        return 0, 0.0
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        return 0, 0.0
 
 def train_model(
     model, 
@@ -80,20 +132,12 @@ def train_model(
         print(f"Epoch {epoch+1}/{num_epochs}, Average Loss: {avg_loss:.4f}")
         
         if (epoch + 1) % save_interval == 0:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-            }, os.path.join(model_save_path, f'xenlite_xen3_epoch_{epoch+1}.pth'))
-            print(f"Model saved at epoch {epoch+1}")
+            filepath = os.path.join(model_save_path, f'xenlite_xen3_epoch_{epoch+1}.pth')
+            save_model_safetensors(model, optimizer, epoch, avg_loss, filepath)
     
-    torch.save({
-        'epoch': num_epochs,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': avg_loss,
-    }, os.path.join(model_save_path, 'xenlite_xen3_final.pth'))
+    # 최종 모델 저장
+    final_filepath = os.path.join(model_save_path, 'xenlite_xen3_final.pth')
+    save_model_safetensors(model, optimizer, num_epochs, avg_loss, final_filepath)
     print("Final model saved!")
 
 def main():
@@ -105,6 +149,7 @@ def main():
     parser.add_argument("--num_workers", type=int, default=4, help="Number of data loader workers")
     parser.add_argument("--save_interval", type=int, default=5, help="Save model every N epochs")
     parser.add_argument("--model_save_path", type=str, default="./models", help="Path to save models")
+    parser.add_argument("--resume_from", type=str, default=None, help="Path to resume training from (safetensors model file)")
     
     args = parser.parse_args()
     
@@ -118,6 +163,16 @@ def main():
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
+    
+    # 옵티마이저 초기화
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.01)
+    
+    # 체크포인트에서 재개하는 경우
+    start_epoch = 0
+    if args.resume_from:
+        optimizer_path = args.resume_from.replace('_model.safetensors', '_optimizer.pth')
+        start_epoch, _ = load_model_safetensors(model, optimizer, args.resume_from, optimizer_path)
+        print(f"Resuming training from epoch {start_epoch + 1}")
     
     scheduler = DDPMScheduler(num_timesteps=750)
     scheduler.betas = scheduler.betas.to(device)

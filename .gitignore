@@ -1,4 +1,4 @@
 models/*
 data/*
 __pycache__/*
-discord_bot_xenlite.py
+discord_bot_safetensors.py
